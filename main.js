@@ -2316,16 +2316,15 @@ function scanLibraries() {
 }
 
 // 读 WPE 的播放列表：返回 { name, ids, delay } 或 null
+// 注意：WPE 的 config.json 可能不是严格合法的 JSON（历史条目里有未转义字符），
+// 所以先尝试 JSON.parse，失败后从 "playlists" 段做宽松提取。
 function readWpePlaylist() {
   const cfg = wallpaperEngineConfig();
   if (!cfg) return null;
-  const root = readJson(cfg);
-  if (!root) return null;
 
-  // config 第一层是用户 id（如 "30492"）
-  const userKey = Object.keys(root).find((k) => root[k] && typeof root[k] === 'object' && root[k].general);
-  const node = userKey ? root[userKey] : null;
-  if (!node) return null;
+  let text = '';
+  try { text = fs.readFileSync(cfg, 'utf8').replace(/^\uFEFF/, ''); } catch (e) { return null; }
+  if (!text) return null;
 
   const pickIds = (items) => {
     const ids = [];
@@ -2337,44 +2336,55 @@ function readWpePlaylist() {
     return ids;
   };
 
-  let name = '';
-  let ids = [];
-  let delay = 0;
-
-  // 优先：当前显示器选中的 playlist
-  const selected = node.wallpaperconfig && node.wallpaperconfig.selectedwallpapers;
-  if (selected && typeof selected === 'object') {
-    for (const monitor of Object.keys(selected)) {
-      const pl = selected[monitor] && selected[monitor].playlist;
-      if (pl && Array.isArray(pl.items) && pl.items.length) {
-        ids = pickIds(pl.items);
-        const st = pl.settings || {};
-        delay = Number(st.delay) || 0;
-        break;
-      }
-    }
-  }
-
-  // 回退：playlists[0]
-  if (!ids.length && Array.isArray(node.playlists)) {
-    for (const pl of node.playlists) {
-      if (pl && Array.isArray(pl.items) && pl.items.length) {
-        const got = pickIds(pl.items);
-        if (got.length) {
-          ids = got;
-          name = typeof pl.name === 'string' ? pl.name : '';
-          delay = Number(pl.settings && pl.settings.delay) || 0;
-          break;
+  try {
+    const root = JSON.parse(text);
+    const userKey = Object.keys(root).find((k) => root[k] && typeof root[k] === 'object' && root[k].general);
+    const node = userKey ? root[userKey] : null;
+    if (node) {
+      let name = '';
+      let ids = [];
+      let delay = 0;
+      const selected = node.wallpaperconfig && node.wallpaperconfig.selectedwallpapers;
+      if (selected && typeof selected === 'object') {
+        for (const monitor of Object.keys(selected)) {
+          const pl = selected[monitor] && selected[monitor].playlist;
+          if (pl && Array.isArray(pl.items) && pl.items.length) {
+            ids = pickIds(pl.items);
+            delay = Number(pl.settings && pl.settings.delay) || 0;
+            name = typeof pl.name === 'string' ? pl.name : '';
+            break;
+          }
         }
       }
+      if (!ids.length && Array.isArray(node.playlists)) {
+        for (const pl of node.playlists) {
+          const got = pickIds(pl && pl.items);
+          if (got.length) {
+            ids = got;
+            name = typeof pl.name === 'string' ? pl.name : '';
+            delay = Number(pl.settings && pl.settings.delay) || 0;
+            break;
+          }
+        }
+      }
+      if (ids.length) return { name: name || 'WPE 播放列表', ids, delay };
     }
-  } else if (ids.length) {
-    const pl = Array.isArray(node.playlists) ? node.playlists.find((x) => x && Array.isArray(x.items) && pickIds(x.items).join(',') === ids.join(',')) : null;
-    if (pl && typeof pl.name === 'string') name = pl.name;
-  }
+  } catch (e) { /* 不是严格 JSON，走宽松解析 */ }
 
+  const segMatch = text.match(/"playlists"\s*:\s*\[([\s\S]*?)\]\s*,\s*"user"/);
+  const seg = segMatch ? segMatch[1] : text;
+  const nameMatch = seg.match(/"name"\s*:\s*"([^"]*)"/);
+  const delayMatch = seg.match(/"delay"\s*:\s*(\d+)/);
+  const ids = [];
+  const re = /431960[\\/](\d+)[\\/]/g;
+  let m;
+  while ((m = re.exec(seg))) if (!ids.includes(m[1])) ids.push(m[1]);
   if (!ids.length) return null;
-  return { name: name || 'WPE 播放列表', ids, delay };
+  return {
+    name: nameMatch ? nameMatch[1] : 'WPE 播放列表',
+    ids,
+    delay: delayMatch ? Number(delayMatch[1]) : 0,
+  };
 }
 
 // ============================================================================

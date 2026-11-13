@@ -1,7 +1,7 @@
 {
   "id": "wallpaper-bg",
   "name": "Wallpaper Background",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "minAppVersion": "1.0.0",
   "description": "Vault image and Wallpaper Engine backgrounds (scene / video / image) for Obsidian, with adjustable dim, panel opacity and corner radius.",
   "author": "Mowendao",
