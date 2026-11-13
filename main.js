@@ -2156,7 +2156,7 @@ ${Ey(n.seedScript)}
 
 
 // ============================================================================
-// Wallpaper Background 2.0.0 逻辑部分
+// Wallpaper Background 2.1.0 逻辑部分
 // 拼接在 webwallgl.global.min.js 之后；UMD 已把导出挂在 module.exports 上。
 // ============================================================================
 const { Plugin, PluginSettingTab, Setting, Notice } = require('obsidian');
@@ -2181,6 +2181,11 @@ const DEFAULT_SETTINGS = {
   weWallpaperId: '',
   weFps: 60,
   wePauseOnBlur: true,
+  transition: 'fade',
+  autoRotate: false,
+  rotateMinutes: 30,
+  rotateOrder: 'random',
+  rotateSource: 'wpe',
 };
 
 function isFile(p) {
@@ -2232,6 +2237,14 @@ function steamLibraries() {
   return Array.from(new Set(out));
 }
 
+function wallpaperEngineConfig() {
+  for (const lib of steamLibraries()) {
+    const cfg = path.join(lib, 'steamapps', 'common', 'wallpaper_engine', 'config.json');
+    if (isFile(cfg)) return cfg;
+  }
+  return '';
+}
+
 function readWallpaperDir(dir) {
   const pj = readJson(path.join(dir, 'project.json'));
   if (!pj) return null;
@@ -2242,7 +2255,6 @@ function readWallpaperDir(dir) {
   const file = typeof pj.file === 'string' ? pj.file : '';
   const filePath = file ? path.join(dir, file) : '';
 
-  // scene.pkg 可以是 project.file 指向的，也可以是目录里的 scene.pkg
   let pkgPath = '';
   if (file && /\.pkg$/i.test(file) && isFile(filePath)) {
     pkgPath = filePath;
@@ -2303,6 +2315,68 @@ function scanLibraries() {
   return items;
 }
 
+// 读 WPE 的播放列表：返回 { name, ids, delay } 或 null
+function readWpePlaylist() {
+  const cfg = wallpaperEngineConfig();
+  if (!cfg) return null;
+  const root = readJson(cfg);
+  if (!root) return null;
+
+  // config 第一层是用户 id（如 "30492"）
+  const userKey = Object.keys(root).find((k) => root[k] && typeof root[k] === 'object' && root[k].general);
+  const node = userKey ? root[userKey] : null;
+  if (!node) return null;
+
+  const pickIds = (items) => {
+    const ids = [];
+    for (const raw of items || []) {
+      if (typeof raw !== 'string') continue;
+      const m = raw.match(/431960[\\/](\d+)[\\/]/);
+      if (m && !ids.includes(m[1])) ids.push(m[1]);
+    }
+    return ids;
+  };
+
+  let name = '';
+  let ids = [];
+  let delay = 0;
+
+  // 优先：当前显示器选中的 playlist
+  const selected = node.wallpaperconfig && node.wallpaperconfig.selectedwallpapers;
+  if (selected && typeof selected === 'object') {
+    for (const monitor of Object.keys(selected)) {
+      const pl = selected[monitor] && selected[monitor].playlist;
+      if (pl && Array.isArray(pl.items) && pl.items.length) {
+        ids = pickIds(pl.items);
+        const st = pl.settings || {};
+        delay = Number(st.delay) || 0;
+        break;
+      }
+    }
+  }
+
+  // 回退：playlists[0]
+  if (!ids.length && Array.isArray(node.playlists)) {
+    for (const pl of node.playlists) {
+      if (pl && Array.isArray(pl.items) && pl.items.length) {
+        const got = pickIds(pl.items);
+        if (got.length) {
+          ids = got;
+          name = typeof pl.name === 'string' ? pl.name : '';
+          delay = Number(pl.settings && pl.settings.delay) || 0;
+          break;
+        }
+      }
+    }
+  } else if (ids.length) {
+    const pl = Array.isArray(node.playlists) ? node.playlists.find((x) => x && Array.isArray(x.items) && pickIds(x.items).join(',') === ids.join(',')) : null;
+    if (pl && typeof pl.name === 'string') name = pl.name;
+  }
+
+  if (!ids.length) return null;
+  return { name: name || 'WPE 播放列表', ids, delay };
+}
+
 // ============================================================================
 
 class WallpaperBgPlugin extends Plugin {
@@ -2314,10 +2388,10 @@ class WallpaperBgPlugin extends Plugin {
     this.videoEl = null;
     this.layer = null;
     this.mediaEl = null;
-    this.dimEl = null;
-    this.blobUrls = [];
+    this.rotationTimer = null;
     this.applyToken = 0;
     this.paused = false;
+    this.wpePlaylist = null;
 
     this.styleEl = document.createElement('style');
     this.styleEl.id = 'wallpaper-bg-style';
@@ -2325,7 +2399,8 @@ class WallpaperBgPlugin extends Plugin {
     this.injectStyle();
 
     this.app.workspace.onLayoutReady(() => {
-      this.applyBackground();
+      this.applyBackground(false);
+      this.startRotation();
     });
 
     this.registerEvent(
@@ -2349,6 +2424,7 @@ class WallpaperBgPlugin extends Plugin {
   }
 
   onunload() {
+    this.stopRotation();
     this.clearRuntime();
     if (this.styleEl) this.styleEl.remove();
   }
@@ -2366,13 +2442,19 @@ class WallpaperBgPlugin extends Plugin {
   scanLibrary(notify) {
     try {
       this.wallpapers = scanLibraries();
-      if (notify) new Notice('Wallpaper Engine：找到 ' + this.wallpapers.length + ' 个壁纸');
-      console.log('[wallpaper-bg] scanned wallpapers:', this.wallpapers.length);
+      this.wpePlaylist = readWpePlaylist();
+      if (notify) new Notice('Wallpaper Engine：' + this.wallpapers.length + ' 个壁纸');
+      console.log('[wallpaper-bg] wallpapers:', this.wallpapers.length, 'wpe playlist:', this.wpePlaylist && this.wpePlaylist.name);
       if (this.settingTab) this.settingTab.display();
     } catch (e) {
       console.error('[wallpaper-bg] scan failed', e);
       if (notify) new Notice('扫描失败：' + e.message);
     }
+  }
+
+  currentWallpaper() {
+    if (this.settings.backgroundSource !== 'we') return null;
+    return this.wallpapers.find((w) => w.id === this.settings.weWallpaperId) || null;
   }
 
   // ---------- style ----------
@@ -2464,6 +2546,18 @@ class WallpaperBgPlugin extends Plugin {
       '  color: var(--text-normal) !important;',
       '  opacity: 1 !important;',
       '}',
+      '.wp-current {',
+      '  display: flex; gap: 12px; align-items: center;',
+      '  padding: 12px; border: 1px solid var(--wp-line); border-radius: 10px;',
+      '  background: var(--background-secondary); margin: 8px 0 12px;',
+      '}',
+      '.wp-current-thumb { width: 96px; height: 64px; border-radius: 6px; overflow: hidden; flex: none; background: var(--background-modifier-border); }',
+      '.wp-current-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }',
+      '.wp-current-info { flex: 1; min-width: 0; }',
+      '.wp-current-title { font-weight: 600; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+      '.wp-current-sub { font-size: 12px; opacity: .7; }',
+      '.wp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }',
+      '.wp-actions button { font-size: 12px; }',
       '.wp-we-grid {',
       '  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));',
       '  gap: 10px; margin: 8px 0 16px;',
@@ -2479,6 +2573,7 @@ class WallpaperBgPlugin extends Plugin {
       '  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;',
       '}',
       '.wp-we-badge { font-size: 10px; opacity: .65; padding: 0 6px 4px; }',
+      '.wp-hint { font-size: 12px; opacity: .7; margin: 4px 0 12px; }',
     ].join('\n');
     this.styleEl.textContent = css;
   }
@@ -2493,9 +2588,9 @@ class WallpaperBgPlugin extends Plugin {
       this.mediaEl.id = 'wp-bg-media';
       this.layer.appendChild(this.mediaEl);
 
-      this.dimEl = document.createElement('div');
-      this.dimEl.id = 'wp-bg-dim';
-      this.layer.appendChild(this.dimEl);
+      const dim = document.createElement('div');
+      dim.id = 'wp-bg-dim';
+      this.layer.appendChild(dim);
 
       document.body.insertBefore(this.layer, document.body.firstChild);
     }
@@ -2511,20 +2606,25 @@ class WallpaperBgPlugin extends Plugin {
       try { this.videoEl.pause(); } catch (e) {}
       this.videoEl = null;
     }
+    if (this.blobUrls) {
+      for (const u of this.blobUrls) {
+        try { URL.revokeObjectURL(u); } catch (e) {}
+      }
+      this.blobUrls = [];
+    }
+    this.clearNodes();
+  }
+
+  clearNodes() {
     if (this.mediaEl) {
       while (this.mediaEl.firstChild) this.mediaEl.removeChild(this.mediaEl.firstChild);
     }
-    for (const url of this.blobUrls) {
-      try { URL.revokeObjectURL(url); } catch (e) {}
-    }
-    this.blobUrls = [];
   }
 
   clearRuntime() {
     this.clearMedia();
     if (this.layer) { this.layer.remove(); this.layer = null; }
     this.mediaEl = null;
-    this.dimEl = null;
   }
 
   fileUrl(filePath) {
@@ -2541,7 +2641,7 @@ class WallpaperBgPlugin extends Plugin {
 
   setLayerImage(src, fit) {
     this.ensureLayer();
-    this.clearMedia();
+    this.clearNodes();
     if (!src) return;
     const img = document.createElement('img');
     img.src = src;
@@ -2560,11 +2660,26 @@ class WallpaperBgPlugin extends Plugin {
     this.paused = paused;
   }
 
+  applyFade() {
+    if (!this.layer) return;
+    if (this.settings.transition === 'fade') {
+      this.layer.style.opacity = '0';
+      this.layer.style.transition = 'opacity .5s ease';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => { if (this.layer) this.layer.style.opacity = '1'; });
+      });
+    } else {
+      this.layer.style.transition = 'none';
+      this.layer.style.opacity = '1';
+    }
+  }
+
   // ---------- apply ----------
-  async applyBackground() {
+  async applyBackground(animate) {
     const token = ++this.applyToken;
     this.clearMedia();
     const s = this.settings;
+    const useFade = animate !== false && s.transition === 'fade';
 
     try {
       if (s.backgroundSource === 'image') {
@@ -2573,29 +2688,33 @@ class WallpaperBgPlugin extends Plugin {
           const url = this.app.vault.adapter.getResourcePath(s.imagePath);
           this.setLayerImage(url, s.imageFit);
         } else {
-          this.setLayerImage('', s.imageFit);
+          this.setLayerImage('');
         }
+        if (useFade) this.applyFade();
         return;
       }
 
       const wp = this.wallpapers.find((w) => w.id === s.weWallpaperId);
-      if (!wp) { this.setLayerImage('', s.imageFit); return; }
+      if (!wp) { this.setLayerImage(''); return; }
 
       if (wp.type === 'scene' && wp.pkgPath) {
         await this.renderScene(wp, token);
+        if (useFade) this.applyFade();
         return;
       }
       if (wp.type === 'video' && wp.filePath) {
         this.renderVideo(wp);
+        if (useFade) this.applyFade();
         return;
       }
       const imgSrc = wp.filePath || wp.previewPath;
       if (imgSrc) this.setLayerImage(this.fileUrl(imgSrc), s.imageFit);
+      if (useFade) this.applyFade();
     } catch (e) {
       console.error('[wallpaper-bg] apply failed', e);
       if (token === this.applyToken) {
-        const wp = this.wallpapers.find((w) => w.id === this.settings.weWallpaperId);
-        if (wp && wp.previewPath) this.setLayerImage(this.fileUrl(wp.previewPath), 'cover');
+        const wp2 = this.wallpapers.find((w) => w.id === this.settings.weWallpaperId);
+        if (wp2 && wp2.previewPath) this.setLayerImage(this.fileUrl(wp2.previewPath), 'cover');
       }
     }
   }
@@ -2641,9 +2760,55 @@ class WallpaperBgPlugin extends Plugin {
     if (p && p.catch) p.catch((e) => console.warn('[wallpaper-bg] video play blocked', e));
   }
 
+  // ---------- rotation ----------
+  rotationPool() {
+    if (this.settings.rotateSource === 'wpe' && this.wpePlaylist && this.wpePlaylist.ids.length) {
+      const set = new Set(this.wpePlaylist.ids);
+      const pool = this.wallpapers.filter((w) => set.has(w.id));
+      if (pool.length) return pool;
+    }
+    return this.wallpapers.slice();
+  }
+
+  startRotation() {
+    this.stopRotation();
+    if (!this.settings.autoRotate) return;
+    const minutes = Math.max(1, Number(this.settings.rotateMinutes) || 30);
+    this.rotationTimer = window.setTimeout(() => this.rotateOnce(), minutes * 60000);
+    console.log('[wallpaper-bg] rotation every', minutes, 'min');
+  }
+
+  stopRotation() {
+    if (this.rotationTimer) {
+      window.clearTimeout(this.rotationTimer);
+      this.rotationTimer = null;
+    }
+  }
+
+  async rotateOnce() {
+    const pool = this.rotationPool();
+    if (pool.length > 1) {
+      let next;
+      if (this.settings.rotateOrder === 'random') {
+        const candidates = pool.filter((w) => w.id !== this.settings.weWallpaperId);
+        next = candidates[Math.floor(Math.random() * candidates.length)];
+      } else {
+        const idx = pool.findIndex((w) => w.id === this.settings.weWallpaperId);
+        next = pool[(idx + 1 + pool.length) % pool.length];
+      }
+      if (next) {
+        this.settings.weWallpaperId = next.id;
+        await this.saveSettings();
+        await this.applyBackground();
+        if (this.settingTab) this.settingTab.display();
+      }
+    }
+    this.startRotation();
+  }
+
   // ---------- thumbnails ----------
   thumbDataUrl(wp) {
-    if (!wp.previewPath) return '';
+    if (!wp || !wp.previewPath) return '';
     if (this.thumbCache.has(wp.previewPath)) return this.thumbCache.get(wp.previewPath);
     try {
       const buf = fs.readFileSync(wp.previewPath);
@@ -2665,6 +2830,7 @@ class WallpaperBgSettingTab extends PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
     plugin.settingTab = this;
+    this.showLibrary = false;
   }
 
   display() {
@@ -2694,8 +2860,7 @@ class WallpaperBgSettingTab extends PluginSettingTab {
         .setName('图片路径')
         .setDesc('Vault 内相对路径，例如 images/wallpaper.jpg')
         .addText((t) =>
-          t
-            .setPlaceholder('images/wallpaper.jpg')
+          t.setPlaceholder('images/wallpaper.jpg')
             .setValue(p.settings.imagePath)
             .onChange(async (v) => {
               p.settings.imagePath = v.trim();
@@ -2704,47 +2869,153 @@ class WallpaperBgSettingTab extends PluginSettingTab {
             })
         );
     } else {
+      const wp = p.currentWallpaper();
+      const card = containerEl.createDiv({ cls: 'wp-current' });
+      const thumb = card.createDiv({ cls: 'wp-current-thumb' });
+      if (wp) {
+        const img = document.createElement('img');
+        img.src = p.thumbDataUrl(wp);
+        thumb.appendChild(img);
+      }
+      const info = card.createDiv({ cls: 'wp-current-info' });
+      info.createDiv({ cls: 'wp-current-title', text: wp ? wp.title : '未选择壁纸' });
+      const state = p.paused ? '已暂停' : (wp ? '播放中' : '—');
+      info.createDiv({
+        cls: 'wp-current-sub',
+        text: wp ? (wp.type + ' · ' + state) : '从下方壁纸库选择',
+      });
+
+      const actions = containerEl.createDiv({ cls: 'wp-actions' });
+      const mkBtn = (label, fn) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.addEventListener('click', fn);
+        actions.appendChild(b);
+      };
+      mkBtn('选择壁纸', () => { this.showLibrary = !this.showLibrary; this.display(); });
+      mkBtn(p.paused ? '继续' : '暂停', () => {
+        p.setPaused(!p.paused);
+        this.display();
+      });
+      mkBtn('清除', async () => {
+        p.settings.weWallpaperId = '';
+        await p.saveSettings();
+        await p.applyBackground();
+        this.display();
+      });
+      mkBtn('刷新', async () => {
+        p.scanLibrary(true);
+        await p.applyBackground();
+        this.display();
+      });
+
+      if (this.showLibrary) {
+        const details = containerEl.createEl('details');
+        details.open = true;
+        details.createEl('summary', { text: '壁纸库（' + p.wallpapers.length + '）' });
+        const grid = details.createDiv({ cls: 'wp-we-grid' });
+        const items = p.wallpapers.slice(0, 300);
+        let i = 0;
+        const renderBatch = () => {
+          const start = Date.now();
+          while (i < items.length && Date.now() - start < 30) {
+            const item = items[i++];
+            const c = grid.createDiv({ cls: 'wp-we-item' });
+            if (item.id === p.settings.weWallpaperId) c.addClass('is-active');
+            const t = p.thumbDataUrl(item);
+            if (t) {
+              const im = document.createElement('img');
+              im.src = t;
+              im.loading = 'lazy';
+              c.appendChild(im);
+            } else {
+              const ph = document.createElement('div');
+              ph.style.height = '84px';
+              ph.style.background = 'var(--background-modifier-border)';
+              c.appendChild(ph);
+            }
+            c.createDiv({ cls: 'wp-we-title', text: item.title });
+            c.createDiv({ cls: 'wp-we-badge', text: item.type });
+            c.addEventListener('click', async () => {
+              p.settings.weWallpaperId = item.id;
+              await p.saveSettings();
+              await p.applyBackground();
+              this.display();
+            });
+          }
+          if (i < items.length) requestAnimationFrame(renderBatch);
+        };
+        renderBatch();
+      }
+    }
+
+    containerEl.createEl('h3', { text: '切换过渡' });
+    new Setting(containerEl)
+      .setName('过场动画')
+      .setDesc('换壁纸时的转场')
+      .addDropdown((dd) =>
+        dd.addOption('fade', '淡入淡出').addOption('none', '硬切')
+          .setValue(p.settings.transition)
+          .onChange(async (v) => {
+            p.settings.transition = v;
+            await p.saveSettings();
+          })
+      );
+
+    if (p.settings.backgroundSource === 'we') {
+      containerEl.createEl('h3', { text: '自动轮播' });
+
+      const listName = p.wpePlaylist
+        ? (p.wpePlaylist.name + '（' + p.wpePlaylist.ids.length + ' 个）')
+        : '未读取到 WPE 播放列表';
+
       new Setting(containerEl)
-        .setName('壁纸库')
-        .setDesc(p.wallpapers.length + ' 个壁纸')
-        .addButton((b) =>
-          b.setButtonText('重新扫描').onClick(() => p.scanLibrary(true))
+        .setName('轮播列表')
+        .setDesc(listName)
+        .addDropdown((dd) =>
+          dd.addOption('wpe', '跟随 WPE 播放列表').addOption('all', '全部壁纸')
+            .setValue(p.settings.rotateSource)
+            .onChange(async (v) => {
+              p.settings.rotateSource = v;
+              await p.saveSettings();
+              this.display();
+            })
         );
 
-      const grid = containerEl.createDiv({ cls: 'wp-we-grid' });
-      const items = p.wallpapers.slice(0, 300);
-      let i = 0;
-      const renderBatch = () => {
-        const start = Date.now();
-        while (i < items.length && Date.now() - start < 30) {
-          const wp = items[i++];
-          const card = grid.createDiv({ cls: 'wp-we-item' });
-          if (wp.id === p.settings.weWallpaperId) card.addClass('is-active');
-          const thumb = p.thumbDataUrl(wp);
-          if (thumb) {
-            const img = document.createElement('img');
-            img.src = thumb;
-            img.loading = 'lazy';
-            card.appendChild(img);
-          } else {
-            const ph = document.createElement('div');
-            ph.style.height = '84px';
-            ph.style.background = 'var(--background-modifier-border)';
-            card.appendChild(ph);
-          }
-          card.createDiv({ cls: 'wp-we-title', text: wp.title });
-          card.createDiv({ cls: 'wp-we-badge', text: wp.type });
-          card.addEventListener('click', async () => {
-            p.settings.weWallpaperId = wp.id;
-            await p.saveSettings();
-            await p.applyBackground();
-            grid.querySelectorAll('.wp-we-item').forEach((el) => el.removeClass('is-active'));
-            card.addClass('is-active');
-          });
-        }
-        if (i < items.length) requestAnimationFrame(renderBatch);
-      };
-      renderBatch();
+      new Setting(containerEl)
+        .setName('自动轮换')
+        .addToggle((t) =>
+          t.setValue(p.settings.autoRotate)
+            .onChange(async (v) => {
+              p.settings.autoRotate = v;
+              await p.saveSettings();
+              p.startRotation();
+              this.display();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName('间隔')
+        .addDropdown((dd) => {
+          for (const m of [5, 10, 15, 30, 60, 120]) dd.addOption(String(m), m + ' 分钟');
+          return dd.setValue(String(p.settings.rotateMinutes))
+            .onChange(async (v) => {
+              p.settings.rotateMinutes = Number(v);
+              await p.saveSettings();
+              p.startRotation();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName('顺序')
+        .addDropdown((dd) =>
+          dd.addOption('random', '随机').addOption('sequential', '顺序')
+            .setValue(p.settings.rotateOrder)
+            .onChange(async (v) => {
+              p.settings.rotateOrder = v;
+              await p.saveSettings();
+            })
+        );
     }
 
     containerEl.createEl('h3', { text: '外观' });
@@ -2780,7 +3051,6 @@ class WallpaperBgSettingTab extends PluginSettingTab {
 
     if (p.settings.backgroundSource === 'we') {
       containerEl.createEl('h3', { text: 'Scene 渲染' });
-
       new Setting(containerEl)
         .setName('帧率上限')
         .addDropdown((dd) =>
