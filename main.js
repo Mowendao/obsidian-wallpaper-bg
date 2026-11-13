@@ -18,6 +18,13 @@ module.exports = class WallpaperBgPlugin extends Plugin {
 
     this.applyStyle();
 
+    // The vault index may not be ready when onload runs, so apply again
+    // once the workspace layout is ready; this fixes the wallpaper not
+    // showing on a fresh Obsidian start.
+    this.app.workspace.onLayoutReady(() => {
+      this.applyStyle();
+    });
+
     this.registerEvent(
       this.app.vault.on('modify', (file) => {
         if (file.path === this.settings.imagePath) this.applyStyle();
