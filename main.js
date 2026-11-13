@@ -56,8 +56,8 @@ module.exports = class WallpaperBgPlugin extends Plugin {
     const file = this.app.vault.getAbstractFileByPath(s.imagePath);
     const url = file ? this.app.vault.adapter.getResourcePath(s.imagePath) : '';
 
-    const titlebarBg = 'var(--background-secondary)';
-    const titlebarBorder = 'var(--background-modifier-border)';
+    const titlebarBg = 'transparent';
+    const titlebarBorder = 'var(--wp-line)';
 
     const bg = url
       ? [
@@ -111,6 +111,11 @@ module.exports = class WallpaperBgPlugin extends Plugin {
       '}',
       '.titlebar-text, .titlebar-text.mod-mac, .titlebar-button {',
       '  color: var(--text-normal) !important;',
+      '}',
+      '.workspace-tabs, .workspace-tab-header-container,',
+      '.workspace-tab-header-container-inner {',
+      '  background-color: transparent !important;',
+      '  box-shadow: none !important;',
       '}',
       '.markdown-reading-view, .markdown-source-view.mod-cm6 .cm-scroller {',
       '  background-color: rgba(var(--wp-panel-rgb), var(--wp-panel)) !important;',
