@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS = {
   panelOpacity: 0.62,
   sideOpacity: 0.84,
   radius: 10,
+  opaqueTitlebar: true,
 };
 
 module.exports = class WallpaperBgPlugin extends Plugin {
@@ -56,6 +57,10 @@ module.exports = class WallpaperBgPlugin extends Plugin {
     const file = this.app.vault.getAbstractFileByPath(s.imagePath);
     const url = file ? this.app.vault.adapter.getResourcePath(s.imagePath) : '';
 
+    const opaque = s.opaqueTitlebar !== false;
+    const titlebarBg = opaque ? 'var(--background-secondary)' : 'transparent';
+    const titlebarBorder = opaque ? 'var(--background-modifier-border)' : 'transparent';
+
     const bg = url
       ? [
           'background-image:',
@@ -71,9 +76,9 @@ module.exports = class WallpaperBgPlugin extends Plugin {
 
     const css = [
       'body {',
-      '  --titlebar-background: transparent !important;',
-      '  --titlebar-background-focused: transparent !important;',
-      '  --tab-container-background: transparent !important;',
+      '  --titlebar-background: ' + titlebarBg + ' !important;',
+      '  --titlebar-background-focused: ' + titlebarBg + ' !important;',
+      '  --tab-container-background: ' + titlebarBg + ' !important;',
       '  --wp-dim: ' + s.dim + ';',
       '  --wp-panel: ' + s.panelOpacity + ';',
       '  --wp-side: ' + s.sideOpacity + ';',
@@ -101,8 +106,8 @@ module.exports = class WallpaperBgPlugin extends Plugin {
       '  box-shadow: none !important;',
       '}',
       '.titlebar, .titlebar-inner {',
-      '  background: transparent !important;',
-      '  border-bottom-color: transparent !important;',
+      '  background: ' + titlebarBg + ' !important;',
+      '  border-bottom: 1px solid ' + titlebarBorder + ' !important;',
       '  box-shadow: none !important;',
       '}',
       '.markdown-reading-view, .markdown-source-view.mod-cm6 .cm-scroller {',
@@ -142,6 +147,19 @@ class WallpaperBgSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.imagePath)
           .onChange(async (value) => {
             this.plugin.settings.imagePath = value.trim();
+            await this.plugin.saveSettings();
+            this.plugin.applyStyle();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Opaque titlebar')
+      .setDesc('Keep the top bar solid instead of showing the wallpaper behind it')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.opaqueTitlebar !== false)
+          .onChange(async (value) => {
+            this.plugin.settings.opaqueTitlebar = value;
             await this.plugin.saveSettings();
             this.plugin.applyStyle();
           })
