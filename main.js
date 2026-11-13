@@ -2,10 +2,18 @@ const { Plugin, PluginSettingTab, Setting } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
   imagePath: 'images/wallpaper.jpg',
+  imageFit: 'cover',
   dim: 0.42,
   panelOpacity: 0.62,
   sideOpacity: 0.84,
   radius: 10,
+};
+
+const IMAGE_FIT = {
+  cover: { size: 'cover', position: 'center center', repeat: 'no-repeat' },
+  contain: { size: 'contain', position: 'center center', repeat: 'no-repeat' },
+  stretch: { size: '100% 100%', position: 'center center', repeat: 'no-repeat' },
+  tile: { size: 'auto', position: '0 0', repeat: 'repeat' },
 };
 
 module.exports = class WallpaperBgPlugin extends Plugin {
@@ -66,15 +74,16 @@ module.exports = class WallpaperBgPlugin extends Plugin {
     const titlebarBg = 'transparent';
     const titlebarBorder = 'var(--wp-line)';
 
+    const fit = IMAGE_FIT[s.imageFit] || IMAGE_FIT.cover;
     const bg = url
       ? [
           'background-image:',
           '  linear-gradient(rgba(var(--wp-mask-rgb), var(--wp-dim)), rgba(var(--wp-mask-rgb), var(--wp-dim))),',
           '  url("' + url + '") !important;',
-          'background-size: cover, cover !important;',
-          'background-position: center center, center center !important;',
+          'background-size: cover, ' + fit.size + ' !important;',
+          'background-position: center center, ' + fit.position + ' !important;',
           'background-attachment: fixed, fixed !important;',
-          'background-repeat: no-repeat, no-repeat !important;',
+          'background-repeat: no-repeat, ' + fit.repeat + ' !important;',
           'background-color: transparent !important;',
         ].join('\n')
       : '';
@@ -188,6 +197,23 @@ class WallpaperBgSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.imagePath)
           .onChange(async (value) => {
             this.plugin.settings.imagePath = value.trim();
+            await this.plugin.saveSettings();
+            this.plugin.applyStyle();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Image fit')
+      .setDesc('How the image fills the window')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('cover', 'Cover (crop to fill)')
+          .addOption('contain', 'Contain (show the whole image)')
+          .addOption('stretch', 'Stretch (fill, may distort)')
+          .addOption('tile', 'Tile (repeat at original size)')
+          .setValue(this.plugin.settings.imageFit)
+          .onChange(async (value) => {
+            this.plugin.settings.imageFit = value;
             await this.plugin.saveSettings();
             this.plugin.applyStyle();
           })
