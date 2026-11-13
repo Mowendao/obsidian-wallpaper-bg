@@ -37,6 +37,12 @@ Desktop only, Windows / macOS / Linux.
 | Frame rate cap | 30 / 60 fps for scene rendering |
 | Pause on blur | stop scene rendering when the window loses focus |
 
+## Rotation
+
+- Follow the active **Wallpaper Engine playlist** (read from `Wallpaper Engine/config.json`, with a tolerant parser for non-strict JSON)
+- Fixed interval (5–120 minutes), random or sequential order
+- Fade or hard-cut transition between wallpapers
+
 ## How it works
 
 - Vault images use Obsidian's `vault.adapter.getResourcePath()`.
