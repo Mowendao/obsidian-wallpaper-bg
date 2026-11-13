@@ -71,6 +71,9 @@ module.exports = class WallpaperBgPlugin extends Plugin {
 
     const css = [
       'body {',
+      '  --titlebar-background: transparent !important;',
+      '  --titlebar-background-focused: transparent !important;',
+      '  --tab-container-background: transparent !important;',
       '  --wp-dim: ' + s.dim + ';',
       '  --wp-panel: ' + s.panelOpacity + ';',
       '  --wp-side: ' + s.sideOpacity + ';',
@@ -95,6 +98,11 @@ module.exports = class WallpaperBgPlugin extends Plugin {
       '.status-bar, .workspace-tab-header-container, .workspace-tab-header-container-inner,',
       '.workspace-tab-header, .sidebar-toggle-button {',
       '  background-color: transparent !important;',
+      '  box-shadow: none !important;',
+      '}',
+      '.titlebar, .titlebar-inner {',
+      '  background: transparent !important;',
+      '  border-bottom-color: transparent !important;',
       '  box-shadow: none !important;',
       '}',
       '.markdown-reading-view, .markdown-source-view.mod-cm6 .cm-scroller {',
