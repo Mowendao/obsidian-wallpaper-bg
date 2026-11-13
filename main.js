@@ -125,6 +125,18 @@ module.exports = class WallpaperBgPlugin extends Plugin {
       '}',
       '.workspace-split.mod-left-split { border-right: 1px solid var(--wp-line); }',
       '.workspace-split.mod-right-split { border-left: 1px solid var(--wp-line); }',
+      '.document-search-container {',
+      '  background-color: rgba(var(--wp-panel-rgb), 0.90) !important;',
+      '  border-radius: var(--wp-radius) !important;',
+      '  backdrop-filter: none !important;',
+      '}',
+      '.document-search-container .search-input-container,',
+      '.document-search-container .search-input-container input {',
+      '  background-color: rgba(var(--wp-panel-rgb), 0.65) !important;',
+      '  border: 1px solid var(--wp-line) !important;',
+      '  box-shadow: none !important;',
+      '  color: var(--text-normal) !important;',
+      '}',
     ].join('\n');
 
     this.styleEl.textContent = css;
