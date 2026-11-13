@@ -135,6 +135,13 @@ module.exports = class WallpaperBgPlugin extends Plugin {
       '  box-shadow: none !important;',
       '  color: var(--text-normal) !important;',
       '}',
+      '.document-search-container .clickable-icon,',
+      '.document-search-container button,',
+      '.document-search-container .search-input-clear-button {',
+      '  --icon-color: var(--text-normal) !important;',
+      '  color: var(--text-normal) !important;',
+      '  opacity: 1 !important;',
+      '}',
     ].join('\n');
 
     this.styleEl.textContent = css;
