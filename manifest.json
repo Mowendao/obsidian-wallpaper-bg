@@ -1,0 +1,9 @@
+{
+  "id": "wallpaper-bg",
+  "name": "Wallpaper Background",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Use an image from the vault as the Obsidian window background, with adjustable dim and panel opacity.",
+  "author": "local",
+  "isDesktopOnly": true
+}

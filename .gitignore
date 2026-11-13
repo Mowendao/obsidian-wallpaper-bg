@@ -1,0 +1,10 @@
+# build artifacts
+node_modules/
+*.log
+
+# local config backups (not part of the plugin)
+*.restore.json
+
+# OS
+.DS_Store
+Thumbs.db
